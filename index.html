@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>TML Real_ID Attendance</title>
+<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+<style>
+:root{--g:#BB8D0A;--b:#111;--w:#fff;--ok:#18794e;--warn:#a86400;--err:#b42318}
+*{box-sizing:border-box}body{margin:0;background:#f3f4f6;font-family:Arial,sans-serif;color:#111}
+.page{max-width:680px;margin:auto;padding:14px}.head{background:#111;color:#fff;border-bottom:6px solid var(--g);padding:18px;text-align:center;border-radius:14px 14px 0 0}
+h1{font-size:23px;margin:0}.event{font-weight:700;margin-top:8px}.counter{background:#fff;text-align:center;padding:12px}.label{font-size:13px;font-weight:700;letter-spacing:1px}
+#count{font-size:44px;font-weight:800}.card{background:#fff;padding:14px;border-radius:0 0 14px 14px;box-shadow:0 3px 14px #0002}
+#reader{width:100%;overflow:hidden;border-radius:10px}.instruction{text-align:center;font-weight:700;margin:10px 0 14px}.buttons{display:flex;gap:10px;margin-top:12px}
+button{flex:1;min-height:50px;border:0;border-radius:10px;font-size:16px;font-weight:700}#start{background:var(--g)}#switch{background:#111;color:#fff}
+.status{margin-top:14px;padding:18px;border-radius:14px;text-align:center;min-height:150px;background:#fff;box-shadow:0 3px 14px #0002;border-top:7px solid var(--g)}
+.status.success{border-color:var(--ok)}.status.duplicate{border-color:var(--warn)}.status.error{border-color:var(--err)}
+.title{font-size:22px;font-weight:800}.member{font-size:27px;font-weight:800;margin:8px 0}.line{font-size:16px;margin:6px}.small{text-align:center;color:#666;font-size:12px;margin-top:12px}
+iframe,form{display:none}
+</style></head>
+<body><div class="page">
+<div class="head"><h1>TML Real_ID Attendance</h1><div class="event" id="event">Loading active event…</div></div>
+<div class="counter"><div class="label">BROTHERS CHECKED IN</div><div id="count">0</div></div>
+<div class="card"><div class="instruction">Tap Start Scanner, then scan the Brother's existing Real_ID QR code.</div><div id="reader"></div>
+<div class="buttons"><button id="start" onclick="startScanner()">Start Scanner</button><button id="switch" onclick="switchCamera()">Switch Camera</button></div></div>
+<div id="box" class="status"><div id="title" class="title">READY</div><div id="member" class="member"></div><div id="alpha" class="line"></div><div id="time" class="line"></div><div id="msg" class="line">Tap Start Scanner to begin.</div></div>
+<div class="small">Uses existing TML Real_ID QR codes without modification.</div>
+<iframe name="postFrame"></iframe><form id="form" method="POST" target="postFrame"><input id="aid" name="alpha_id"><input id="tok" name="token"></form>
+</div>
+<script>
+const BACKEND_URL='https://script.google.com/macros/s/AKfycbwdN48JaxgLN6dE2_PUFqCHDXIR1z5-TeuRCaHNpet_rSgH5hnqvXIFLvMHxJN_3WlRnA/exec';
+let qr=null,cameras=[],cam=0,running=false,processing=false,poll=null;
+window.addEventListener('load',()=>{if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(BACKEND_URL)){show('error','SETUP REQUIRED','','','','Paste your Apps Script /exec URL into BACKEND_URL.');return}jsonp('status',{},d=>{event.textContent=d.eventName||'NO ACTIVE EVENT';count.textContent=Number(d.count||0);if(!d.ok)show('error','NOT READY','','','',d.message||'No active event.')})});
+async function startScanner(){if(processing||running)return;try{if(!cameras.length){cameras=await Html5Qrcode.getCameras();if(!cameras.length)throw Error('No camera detected.');let r=cameras.findIndex(c=>/back|rear|environment/i.test(c.label||''));cam=r>=0?r:0}if(!qr)qr=new Html5Qrcode('reader');await qr.start(cameras[cam].id,{fps:10,qrbox:(w,h)=>{let e=Math.floor(Math.min(w,h)*.72);return{width:e,height:e}}},scan,()=>{});running=true;start.textContent='Scanner Running';show('ready','READY TO SCAN','','','','Hold the existing Real_ID QR code inside the camera box.')}catch(e){running=false;show('error','CAMERA ERROR','','','',err(e))}}
+async function stop(){if(qr&&running){try{await qr.stop()}catch(e){}running=false;start.textContent='Start Scanner'}}
+async function switchCamera(){if(processing)return;try{if(!cameras.length)cameras=await Html5Qrcode.getCameras();if(cameras.length<2)return;await stop();cam=(cam+1)%cameras.length;await startScanner()}catch(e){show('error','CAMERA ERROR','','','',err(e))}}
+async function scan(text){if(processing)return;let id=String(text||'').trim();if(!id)return;processing=true;await stop();show('ready','PROCESSING…','','Alpha ID: '+id,'','Checking attendance.');submit(id)}
+function submit(id){let token=Date.now().toString(36)+'_'+Math.random().toString(36).slice(2)+'_'+Math.random().toString(36).slice(2);let f=document.getElementById('form');f.action=BACKEND_URL;aid.value=id;tok.value=token;f.submit();let tries=0;clearInterval(poll);poll=setInterval(()=>{tries++;jsonp('result',{token},d=>{if(d&&d.ready){clearInterval(poll);result(d)}});if(tries>=20){clearInterval(poll);processing=false;show('error','TIMEOUT','','','','Check Attendance Log before rescanning.')}},500)}
+function result(r){processing=false;count.textContent=Number(r.count||0);if(r.eventName)event.textContent=r.eventName;let t=r.time?(r.state==='duplicate'?'Original check-in: ':'Checked in: ')+r.time:'';show(r.state||'error',r.title||'ATTENDANCE',r.memberName||'',r.alphaId?'Alpha ID: '+r.alphaId:'',t,r.message||'');setTimeout(()=>{if(!processing)startScanner()},r.state==='success'?1800:2800)}
+function jsonp(action,params,cb){let name='tmlcb_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2),s=document.createElement('script');window[name]=d=>{try{cb(d)}finally{delete window[name];s.remove()}};let q=new URLSearchParams({action,callback:name,...params});s.src=BACKEND_URL+'?'+q;s.onerror=()=>{delete window[name];s.remove()};document.body.appendChild(s)}
+function show(state,t,m,a,tm,msg){box.className='status '+(state||'ready');title.textContent=t||'';member.textContent=m||'';alpha.textContent=a||'';time.textContent=tm||'';document.getElementById('msg').textContent=msg||''}
+function err(e){return e?(e.message||String(e)):'Unknown error.'}
+</script></body></html>
