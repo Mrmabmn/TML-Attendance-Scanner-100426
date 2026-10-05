@@ -27,16 +27,26 @@ iframe,form{display:none}
 <iframe name="postFrame"></iframe><form id="form" method="POST" target="postFrame"><input id="aid" name="alpha_id"><input id="tok" name="token"></form>
 </div>
 <script>
-const BACKEND_URL='https://script.google.com/macros/s/AKfycbwdN48JaxgLN6dE2_PUFqCHDXIR1z5-TeuRCaHNpet_rSgH5hnqvXIFLvMHxJN_3WlRnA/exec';
+const BACKEND_URL='PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE';
 let qr=null,cameras=[],cam=0,running=false,processing=false,poll=null;
-window.addEventListener('load',()=>{if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(BACKEND_URL)){show('error','SETUP REQUIRED','','','','Paste your Apps Script /exec URL into BACKEND_URL.');return}jsonp('status',{},d=>{event.textContent=d.eventName||'NO ACTIVE EVENT';count.textContent=Number(d.count||0);if(!d.ok)show('error','NOT READY','','','',d.message||'No active event.')})});
-async function startScanner(){if(processing||running)return;try{if(!cameras.length){cameras=await Html5Qrcode.getCameras();if(!cameras.length)throw Error('No camera detected.');let r=cameras.findIndex(c=>/back|rear|environment/i.test(c.label||''));cam=r>=0?r:0}if(!qr)qr=new Html5Qrcode('reader');await qr.start(cameras[cam].id,{fps:10,qrbox:(w,h)=>{let e=Math.floor(Math.min(w,h)*.72);return{width:e,height:e}}},scan,()=>{});running=true;start.textContent='Scanner Running';show('ready','READY TO SCAN','','','','Hold the existing Real_ID QR code inside the camera box.')}catch(e){running=false;show('error','CAMERA ERROR','','','',err(e))}}
-async function stop(){if(qr&&running){try{await qr.stop()}catch(e){}running=false;start.textContent='Start Scanner'}}
+const eventEl=document.getElementById('event');
+const countEl=document.getElementById('count');
+const startEl=document.getElementById('start');
+const boxEl=document.getElementById('box');
+const titleEl=document.getElementById('title');
+const memberEl=document.getElementById('member');
+const alphaEl=document.getElementById('alpha');
+const timeEl=document.getElementById('time');
+const aidEl=document.getElementById('aid');
+const tokEl=document.getElementById('tok');
+window.addEventListener('load',()=>{if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(BACKEND_URL)){show('error','SETUP REQUIRED','','','','Paste your Apps Script /exec URL into BACKEND_URL.');return}jsonp('status',{},d=>{eventEl.textContent=d.eventName||'NO ACTIVE EVENT';countEl.textContent=Number(d.count||0);if(!d.ok)show('error','NOT READY','','','',d.message||'No active event.')})});
+async function startScanner(){if(processing||running)return;try{if(!cameras.length){cameras=await Html5Qrcode.getCameras();if(!cameras.length)throw Error('No camera detected.');let r=cameras.findIndex(c=>/back|rear|environment/i.test(c.label||''));cam=r>=0?r:0}if(!qr)qr=new Html5Qrcode('reader');await qr.start(cameras[cam].id,{fps:10,qrbox:(w,h)=>{let e=Math.floor(Math.min(w,h)*.72);return{width:e,height:e}}},scan,()=>{});running=true;startEl.textContent='Scanner Running';show('ready','READY TO SCAN','','','','Hold the existing Real_ID QR code inside the camera box.')}catch(e){running=false;show('error','CAMERA ERROR','','','',err(e))}}
+async function stop(){if(qr&&running){try{await qr.stop()}catch(e){}running=false;startEl.textContent='Start Scanner'}}
 async function switchCamera(){if(processing)return;try{if(!cameras.length)cameras=await Html5Qrcode.getCameras();if(cameras.length<2)return;await stop();cam=(cam+1)%cameras.length;await startScanner()}catch(e){show('error','CAMERA ERROR','','','',err(e))}}
 async function scan(text){if(processing)return;let id=String(text||'').trim();if(!id)return;processing=true;await stop();show('ready','PROCESSING…','','Alpha ID: '+id,'','Checking attendance.');submit(id)}
-function submit(id){let token=Date.now().toString(36)+'_'+Math.random().toString(36).slice(2)+'_'+Math.random().toString(36).slice(2);let f=document.getElementById('form');f.action=BACKEND_URL;aid.value=id;tok.value=token;f.submit();let tries=0;clearInterval(poll);poll=setInterval(()=>{tries++;jsonp('result',{token},d=>{if(d&&d.ready){clearInterval(poll);result(d)}});if(tries>=20){clearInterval(poll);processing=false;show('error','TIMEOUT','','','','Check Attendance Log before rescanning.')}},500)}
-function result(r){processing=false;count.textContent=Number(r.count||0);if(r.eventName)event.textContent=r.eventName;let t=r.time?(r.state==='duplicate'?'Original check-in: ':'Checked in: ')+r.time:'';show(r.state||'error',r.title||'ATTENDANCE',r.memberName||'',r.alphaId?'Alpha ID: '+r.alphaId:'',t,r.message||'');setTimeout(()=>{if(!processing)startScanner()},r.state==='success'?1800:2800)}
+function submit(id){let token=Date.now().toString(36)+'_'+Math.random().toString(36).slice(2)+'_'+Math.random().toString(36).slice(2);let f=document.getElementById('form');f.action=BACKEND_URL;aidEl.value=id;tokEl.value=token;f.submit();let tries=0;clearInterval(poll);poll=setInterval(()=>{tries++;jsonp('result',{token},d=>{if(d&&d.ready){clearInterval(poll);result(d)}});if(tries>=20){clearInterval(poll);processing=false;show('error','TIMEOUT','','','','Check Attendance Log before rescanning.')}},500)}
+function result(r){processing=false;countEl.textContent=Number(r.count||0);if(r.eventName)eventEl.textContent=r.eventName;let t=r.time?(r.state==='duplicate'?'Original check-in: ':'Checked in: ')+r.time:'';show(r.state||'error',r.title||'ATTENDANCE',r.memberName||'',r.alphaId?'Alpha ID: '+r.alphaId:'',t,r.message||'');setTimeout(()=>{if(!processing)startScanner()},r.state==='success'?1800:2800)}
 function jsonp(action,params,cb){let name='tmlcb_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2),s=document.createElement('script');window[name]=d=>{try{cb(d)}finally{delete window[name];s.remove()}};let q=new URLSearchParams({action,callback:name,...params});s.src=BACKEND_URL+'?'+q;s.onerror=()=>{delete window[name];s.remove()};document.body.appendChild(s)}
-function show(state,t,m,a,tm,msg){box.className='status '+(state||'ready');title.textContent=t||'';member.textContent=m||'';alpha.textContent=a||'';time.textContent=tm||'';document.getElementById('msg').textContent=msg||''}
+function show(state,t,m,a,tm,msg){boxEl.className='status '+(state||'ready');titleEl.textContent=t||'';memberEl.textContent=m||'';alphaEl.textContent=a||'';timeEl.textContent=tm||'';document.getElementById('msg').textContent=msg||''}
 function err(e){return e?(e.message||String(e)):'Unknown error.'}
 </script></body></html>
