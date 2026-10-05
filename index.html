@@ -129,10 +129,6 @@ const tokEl=document.getElementById('tok');
 startEl.addEventListener('click',startScanner);
 switchEl.addEventListener('click',switchCamera);
 
-window.addEventListener('load',function(){
-  loadStatus();
-});
-
 function loadStatus(){
   jsonp('status',{},function(d){
     eventEl.textContent=d.eventName||'NO ACTIVE EVENT';
@@ -151,6 +147,10 @@ function loadStatus(){
     }
   });
 }
+
+window.addEventListener('load',function(){
+  pinEl.focus();
+});
 
 function unlockScanner(){
   const pin=String(pinEl.value||'').trim();
@@ -180,15 +180,6 @@ function unlockScanner(){
 }
 unlockEl.addEventListener('click',unlockScanner);
 pinEl.addEventListener('keydown',e=>{if(e.key==='Enter')unlockScanner();});
-
-function loadStatus(){
-  jsonp('status',{},d=>{
-    event.textContent=d.eventName||'NO ACTIVE EVENT';
-    if(d.eventDate)event.textContent+=(event.textContent?' — ':'')+d.eventDate;
-    count.textContent=Number(d.count||0);
-    if(!d.ok)show('error','NOT READY','','','',d.message||'No active event.');
-  });
-}
 
 async function startScanner(){unlockAudio();
   if(processing||running)return;
