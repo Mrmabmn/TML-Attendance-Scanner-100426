@@ -24,7 +24,7 @@ h1{font-size:23px;margin:0}
 .buttons{display:flex;gap:10px;margin-top:12px}
 button{flex:1;min-height:50px;border:0;border-radius:10px;font-size:16px;font-weight:700}
 #start{background:var(--g);color:#111}
-#switch{background:#111;color:#fff}
+#switch{background:#111;color:#fff}#sound{background:#e5e7eb;color:#111}
 .status{margin-top:14px;padding:18px;border-radius:14px;text-align:center;min-height:150px;background:#fff;box-shadow:0 3px 14px #0002;border-top:7px solid var(--g)}
 .status.success{border-color:var(--ok)}
 .status.duplicate{border-color:var(--warn)}
@@ -60,7 +60,7 @@ iframe,form{display:none}
 
   <div class="buttons">
     <button id="start" type="button">Start Scanner</button>
-    <button id="switch" type="button">Switch Camera</button>
+    <button id="switch" type="button">Switch Camera</button><button id="sound" type="button">Sound: ON</button>
   </div>
 </div>
 
@@ -88,13 +88,14 @@ iframe,form{display:none}
 <script>
 const BACKEND_URL='https://script.google.com/macros/s/AKfycbwdN48JaxgLN6dE2_PUFqCHDXIR1z5-TeuRCaHNpet_rSgH5hnqvXIFLvMHxJN_3WlRnA/exec';
 
-let qr=null,cameras=[],cam=0,running=false,processing=false,poll=null;
+let qr=null,cameras=[],cam=0,running=false,processing=false,poll=null,soundOn=true,audioCtx=null;
 
 const eventEl=document.getElementById('event');
 const eventDateEl=document.getElementById('eventDate');
 const countEl=document.getElementById('count');
 const startEl=document.getElementById('start');
 const switchEl=document.getElementById('switch');
+const soundEl=document.getElementById('sound');
 const boxEl=document.getElementById('box');
 const titleEl=document.getElementById('title');
 const memberEl=document.getElementById('member');
@@ -107,6 +108,7 @@ const tokEl=document.getElementById('tok');
 
 startEl.addEventListener('click',startScanner);
 switchEl.addEventListener('click',switchCamera);
+soundEl.addEventListener('click',toggleSound);
 
 window.addEventListener('load',function(){
   loadStatus();
@@ -292,8 +294,55 @@ function submit(id){
   },500);
 }
 
+function toggleSound(){
+  soundOn=!soundOn;
+  soundEl.textContent=soundOn?'Sound: ON':'Sound: OFF';
+  if(soundOn)tone(660,.08,0);
+}
+function audio(){
+  if(!audioCtx){
+    const C=window.AudioContext||window.webkitAudioContext;
+    if(C)audioCtx=new C();
+  }
+  if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();
+  return audioCtx;
+}
+function tone(freq,duration,delay){
+  if(!soundOn)return;
+  const ctx=audio(); if(!ctx)return;
+  const osc=ctx.createOscillator(), gain=ctx.createGain();
+  const start=ctx.currentTime+(delay||0);
+  osc.frequency.value=freq; osc.type='sine';
+  gain.gain.setValueAtTime(.0001,start);
+  gain.gain.exponentialRampToValueAtTime(.18,start+.01);
+  gain.gain.exponentialRampToValueAtTime(.0001,start+duration);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(start); osc.stop(start+duration+.02);
+}
+function feedback(state,title){
+  const t=String(title||'').toUpperCase();
+  if(state==='success'){
+    tone(660,.12,0); tone(880,.16,.14);
+    if(navigator.vibrate)navigator.vibrate(80); return;
+  }
+  if(state==='duplicate'){
+    tone(520,.10,0); tone(520,.10,.16);
+    if(navigator.vibrate)navigator.vibrate([90,80,90]); return;
+  }
+  if(state==='error'){
+    if(t.includes('MEMBER NOT FOUND')){
+      tone(330,.18,0); tone(220,.28,.20);
+      if(navigator.vibrate)navigator.vibrate(350);
+    } else {
+      tone(260,.28,0);
+      if(navigator.vibrate)navigator.vibrate(300);
+    }
+  }
+}
+
 function handleResult(r){
   processing=false;
+  feedback(r.state,r.title);
 
   countEl.textContent=Number(r.count||0);
 
