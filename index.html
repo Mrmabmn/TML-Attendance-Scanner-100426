@@ -1,1187 +1,440 @@
-/**
- * TML Real_ID Attendance — GitHub Pages Backend
- *
- * Existing QR codes remain unchanged.
- * QR payload = Brother's Alpha_ID.
- *
- * Required worksheets:
- *   TML_Members_030926 with E-mail
- *   Attendance Events
- *   Attendance Log
- *   Attendance Dashboard
- *
- * Attendance Events headers:
- *   Event_ID | Event Name | Event Date | Status
- *
- * Attendance Log headers:
- *   Scan_ID | Event_ID | Alpha_ID | Scanned Date | Full Name
- */
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>TML Real_ID Attendance</title>
+<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 
-const CFG = Object.freeze({
-  TZ: 'America/Chicago',
-  MEMBERS: 'TML_Members_030926 with E-mail',
-  EVENTS: 'Attendance Events',
-  LOG: 'Attendance Log',
-  DASH: 'Attendance Dashboard',
-  REPORTS: 'Attendance Reports',
-  ACTIVE_STATUS: 'ACTIVE',
-  RESULT_CACHE_SECONDS: 120
+<style>
+:root{--g:#BB8D0A;--ok:#18794e;--warn:#a86400;--err:#b42318}
+*{box-sizing:border-box}
+body{margin:0;background:#f3f4f6;font-family:Arial,sans-serif;color:#111}
+.page{max-width:680px;margin:auto;padding:14px}
+.head{background:#111;color:#fff;border-bottom:6px solid var(--g);padding:18px;text-align:center;border-radius:14px 14px 0 0}
+h1{font-size:23px;margin:0}
+.event{font-weight:800;margin-top:10px;font-size:18px}
+.event-date{font-weight:600;margin-top:5px;font-size:16px;color:#f2d779}
+.counter{background:#fff;text-align:center;padding:12px}
+.label{font-size:13px;font-weight:700;letter-spacing:1px}
+#count{font-size:44px;font-weight:800}
+.card{background:#fff;padding:14px;border-radius:0 0 14px 14px;box-shadow:0 3px 14px #0002}
+#reader{width:100%;overflow:hidden;border-radius:10px}
+.instruction{text-align:center;font-weight:700;margin:10px 0 14px}
+.buttons{display:flex;gap:10px;margin-top:12px}
+button{flex:1;min-height:50px;border:0;border-radius:10px;font-size:16px;font-weight:700}
+#start{background:var(--g);color:#111}
+#switch{background:#111;color:#fff}
+.status{margin-top:14px;padding:18px;border-radius:14px;text-align:center;min-height:150px;background:#fff;box-shadow:0 3px 14px #0002;border-top:7px solid var(--g)}
+.status.success{border-color:var(--ok)}
+.status.duplicate{border-color:var(--warn)}
+.status.error{border-color:var(--err)}
+.title{font-size:22px;font-weight:800}
+.member{font-size:27px;font-weight:800;margin:8px 0}
+.line{font-size:16px;margin:6px}
+.small{text-align:center;color:#666;font-size:12px;margin-top:12px}
+iframe,form{display:none}
+</style>
+</head>
+
+<body>
+<div class="page">
+
+<div class="head">
+  <h1>TML Real_ID Attendance</h1>
+  <div class="event" id="event">Loading active event…</div>
+  <div class="event-date" id="eventDate"></div>
+</div>
+
+<div class="counter">
+  <div class="label">BROTHERS CHECKED IN</div>
+  <div id="count">0</div>
+</div>
+
+<div class="card">
+  <div class="instruction">
+    Tap Start Scanner, then scan the Brother's existing Real_ID QR code.
+  </div>
+
+  <div id="reader"></div>
+
+  <div class="buttons">
+    <button id="start" type="button">Start Scanner</button>
+    <button id="switch" type="button">Switch Camera</button>
+  </div>
+</div>
+
+<div id="box" class="status">
+  <div id="title" class="title">READY</div>
+  <div id="member" class="member"></div>
+  <div id="alpha" class="line"></div>
+  <div id="time" class="line"></div>
+  <div id="msg" class="line">Tap Start Scanner to begin.</div>
+</div>
+
+<div class="small">
+  Uses existing TML Real_ID QR codes without modification.
+</div>
+
+<iframe id="postFrame" name="postFrame"></iframe>
+
+<form id="form" method="POST" target="postFrame">
+  <input id="aid" name="alpha_id">
+  <input id="tok" name="token">
+</form>
+
+</div>
+
+<script>
+const BACKEND_URL='https://script.google.com/macros/s/AKfycbwdN48JaxgLN6dE2_PUFqCHDXIR1z5-TeuRCaHNpet_rSgH5hnqvXIFLvMHxJN_3WlRnA/exec';
+
+let qr=null,cameras=[],cam=0,running=false,processing=false,poll=null,audioCtx=null;
+
+const eventEl=document.getElementById('event');
+const eventDateEl=document.getElementById('eventDate');
+const countEl=document.getElementById('count');
+const startEl=document.getElementById('start');
+const switchEl=document.getElementById('switch');
+const boxEl=document.getElementById('box');
+const titleEl=document.getElementById('title');
+const memberEl=document.getElementById('member');
+const alphaEl=document.getElementById('alpha');
+const timeEl=document.getElementById('time');
+const msgEl=document.getElementById('msg');
+const formEl=document.getElementById('form');
+const aidEl=document.getElementById('aid');
+const tokEl=document.getElementById('tok');
+
+startEl.addEventListener('click',startScanner);
+switchEl.addEventListener('click',switchCamera);
+
+window.addEventListener('load',function(){
+  loadStatus();
 });
 
+function loadStatus(){
+  jsonp('status',{},function(d){
+    eventEl.textContent=d.eventName||'NO ACTIVE EVENT';
+    eventDateEl.textContent=d.eventDate||'';
+    countEl.textContent=Number(d.count||0);
 
-/* ========================================================================== */
-/* WEB ENDPOINTS                                                              */
-/* ========================================================================== */
-
-/**
- * Read-only endpoints used by the GitHub Pages scanner.
- *
- * Examples:
- *   ?action=status&callback=myCallback
- *   ?action=result&token=TOKEN&callback=myCallback
- */
-function doGet(e) {
-  const p = (e && e.parameter) || {};
-  const action = String(p.action || 'status').toLowerCase();
-  const callback = safeCallback_(p.callback || 'tmlCallback');
-
-  try {
-    if (action === 'result') {
-      const token = safeToken_(p.token || '');
-
-      if (!token) {
-        return jsonp_(callback, {
-          ready: false,
-          error: 'Missing scanner token.'
-        });
-      }
-
-      const raw = CacheService
-        .getScriptCache()
-        .get('scan:' + token);
-
-      if (!raw) {
-        return jsonp_(callback, { ready: false });
-      }
-
-      return jsonp_(
-        callback,
-        Object.assign(
-          { ready: true },
-          JSON.parse(raw)
-        )
+    if(!d.ok){
+      show(
+        'error',
+        'NOT READY',
+        '',
+        '',
+        '',
+        d.message||'No active event.'
       );
     }
-
-    const event = activeEvent_();
-
-    if (!event) {
-      return jsonp_(callback, {
-        ok: false,
-        eventName: 'NO ACTIVE EVENT',
-        eventId: '',
-        eventDate: '',
-        count: 0,
-        message: 'Mark one Attendance Events row ACTIVE.'
-      });
-    }
-
-    return jsonp_(callback, {
-      ok: true,
-      eventName: event.name,
-      eventId: event.id,
-      eventDate: formatEventDate_(event.date),
-      count: count_(event.id),
-      message: 'Ready to scan.'
-    });
-
-  } catch (err) {
-    return jsonp_(callback, {
-      ok: false,
-      eventName: 'ATTENDANCE ERROR',
-      eventId: '',
-      eventDate: '',
-      count: 0,
-      message: String(err && err.message ? err.message : err)
-    });
-  }
+  });
 }
 
+async function startScanner(){unlockAudio();
+  if(processing||running)return;
 
-/**
- * Write endpoint used by the GitHub Pages scanner.
- *
- * POST parameters:
- *   alpha_id = existing QR payload
- *   token    = random per-scan token
- */
-function doPost(e) {
-  const p = (e && e.parameter) || {};
+  try{
+    if(!cameras.length){
+      cameras=await Html5Qrcode.getCameras();
 
-  const alphaId = normalizeAlphaId_(
-    p.alpha_id || p.id || ''
-  );
+      if(!cameras.length){
+        throw Error('No camera detected.');
+      }
 
-  const token = safeToken_(p.token || '');
-
-  let result;
-
-  try {
-    if (!token) {
-      throw new Error('Missing scanner token.');
-    }
-
-    if (
-      !alphaId ||
-      !/^[A-Za-z0-9_-]+$/.test(alphaId)
-    ) {
-      result = result_(
-        'error',
-        'INVALID QR CODE',
-        'This QR code does not contain a valid TML Alpha ID.',
-        '',
-        alphaId,
-        '',
-        '',
-        '',
-        currentCount_(),
-        ''
+      const r=cameras.findIndex(
+        c=>/back|rear|environment/i.test(c.label||'')
       );
-    } else {
-      result = checkIn_(alphaId);
+
+      cam=r>=0?r:0;
     }
 
-  } catch (err) {
-    result = result_(
+    if(!qr){
+      qr=new Html5Qrcode('reader');
+    }
+
+    await qr.start(
+      cameras[cam].id,
+      {
+        fps:10,
+        qrbox:(w,h)=>{
+          const e=Math.floor(Math.min(w,h)*.72);
+          return {width:e,height:e};
+        }
+      },
+      scan,
+      ()=>{}
+    );
+
+    running=true;
+    startEl.textContent='Scanner Running';
+
+    show(
+      'ready',
+      'READY TO SCAN',
+      '',
+      '',
+      '',
+      'Hold the existing Real_ID QR code inside the camera box.'
+    );
+
+  }catch(e){
+    running=false;
+    startEl.textContent='Start Scanner';
+
+    show(
       'error',
-      'CHECK-IN ERROR',
-      String(err && err.message ? err.message : err),
-      '',
-      alphaId,
+      'CAMERA ERROR',
       '',
       '',
       '',
-      currentCount_(),
-      ''
+      err(e)
     );
-  }
-
-  if (token) {
-    CacheService
-      .getScriptCache()
-      .put(
-        'scan:' + token,
-        JSON.stringify(result),
-        CFG.RESULT_CACHE_SECONDS
-      );
-  }
-
-  return HtmlService.createHtmlOutput(
-    '<!doctype html><html><body>OK</body></html>'
-  );
-}
-
-
-/* ========================================================================== */
-/* CHECK-IN ENGINE                                                            */
-/* ========================================================================== */
-
-function checkIn_(alphaId) {
-  const lock = LockService.getScriptLock();
-
-  try {
-    lock.waitLock(10000);
-
-
-    const memberName = member_(alphaId);
-
-    if (!memberName) {
-      return result_(
-        'error',
-        'MEMBER NOT FOUND',
-        'Alpha ID ' + alphaId + ' was not found in the TML membership roster.',
-        '',
-        alphaId,
-        '',
-        '',
-        '',
-        currentCount_(),
-        ''
-      );
-    }
-
-    const event = activeEvent_();
-
-    if (!event) {
-      return result_(
-        'error',
-        'NO ACTIVE EVENT',
-        'Mark one event ACTIVE before check-in begins.',
-        memberName,
-        alphaId,
-        '',
-        '',
-        '',
-        0,
-        ''
-      );
-    }
-
-    const duplicateDate = duplicate_(
-      event.id,
-      alphaId
-    );
-
-    if (duplicateDate) {
-      return result_(
-        'duplicate',
-        'ALREADY CHECKED IN',
-        'This Brother is already recorded for this event.',
-        memberName,
-        alphaId,
-        event.name,
-        event.id,
-        formatEventDate_(event.date),
-        count_(event.id),
-        displayStoredTimestamp_(duplicateDate)
-      );
-    }
-
-    const now = new Date();
-    const checkInTime = chicagoTimestamp_(now);
-    const logSheet = sheet_(CFG.LOG);
-
-    // Scanned Date is intentionally stored as TEXT in America/Chicago.
-    // This prevents Google Sheets from redisplaying the UTC instant.
-    logSheet.appendRow([
-      Utilities
-        .getUuid()
-        .replace(/-/g, '')
-        .slice(0, 8)
-        .toUpperCase(),
-      event.id,
-      alphaId,
-      checkInTime,
-      memberName
-    ]);
-
-    logSheet
-      .getRange(logSheet.getLastRow(), 4)
-      .setNumberFormat('@');
-
-    SpreadsheetApp.flush();
-
-    const count = count_(event.id);
-
-    dashboard_(
-      event,
-      count,
-      memberName,
-      checkInTime
-    );
-
-    return result_(
-      'success',
-      'CHECK-IN SUCCESSFUL',
-      'Attendance recorded.',
-      memberName,
-      alphaId,
-      event.name,
-      event.id,
-      formatEventDate_(event.date),
-      count,
-      checkInTime
-    );
-
-  } finally {
-    try {
-      lock.releaseLock();
-    } catch (_) {}
   }
 }
 
-
-/* ========================================================================== */
-/* MEMBER LOOKUP                                                              */
-/* ========================================================================== */
-
-function member_(alphaId) {
-  const values = sheet_(CFG.MEMBERS)
-    .getDataRange()
-    .getDisplayValues();
-
-  if (values.length < 2) {
-    return null;
+async function stopScanner(){
+  if(qr&&running){
+    try{await qr.stop();}catch(e){}
+    running=false;
+    startEl.textContent='Start Scanner';
   }
-
-  const headers = values[0].map(String);
-
-  const alphaCol = headers.indexOf('Alpha_ID');
-  const nameCol = headers.indexOf('Full Name');
-
-  if (alphaCol < 0 || nameCol < 0) {
-    throw new Error(
-      'Member roster requires Alpha_ID and Full Name.'
-    );
-  }
-
-  for (let row = 1; row < values.length; row++) {
-    if (
-      normalizeAlphaId_(values[row][alphaCol]) ===
-      alphaId
-    ) {
-      return String(
-        values[row][nameCol] || ''
-      ).trim();
-    }
-  }
-
-  return null;
 }
 
+async function switchCamera(){
+  if(processing)return;
 
-/* ========================================================================== */
-/* ACTIVE EVENT                                                               */
-/* ========================================================================== */
-
-function activeEvent_() {
-  const sh = sheet_(CFG.EVENTS);
-  const values = sh.getDataRange().getDisplayValues();
-
-  if (values.length < 2) {
-    return null;
-  }
-
-  const headers = values[0].map(String);
-
-  const eventIdCol = headers.indexOf('Event_ID');
-  const eventNameCol = headers.indexOf('Event Name');
-  const eventDateCol = headers.indexOf('Event Date');
-  const statusCol = headers.indexOf('Status');
-
-  if (
-    eventIdCol < 0 ||
-    eventNameCol < 0 ||
-    eventDateCol < 0 ||
-    statusCol < 0
-  ) {
-    throw new Error(
-      'Attendance Events requires Event_ID, Event Name, Event Date, and Status.'
-    );
-  }
-
-  const active = [];
-
-  for (let row = 1; row < values.length; row++) {
-    const status = String(values[row][statusCol] || '')
-      .trim()
-      .toUpperCase();
-
-    if (status === CFG.ACTIVE_STATUS) {
-      active.push({
-        id: String(values[row][eventIdCol] || '').trim(),
-        name: String(values[row][eventNameCol] || '').trim(),
-
-        // Read the date exactly as displayed in Google Sheets.
-        // This prevents any UTC/local-time conversion.
-        date: String(values[row][eventDateCol] || '').trim()
-      });
+  try{
+    if(!cameras.length){
+      cameras=await Html5Qrcode.getCameras();
     }
-  }
 
-  if (active.length > 1) {
-    throw new Error(
-      'More than one event is marked ACTIVE.'
+    if(cameras.length<2)return;
+
+    await stopScanner();
+    cam=(cam+1)%cameras.length;
+    await startScanner();
+
+  }catch(e){
+    show(
+      'error',
+      'CAMERA ERROR',
+      '',
+      '',
+      '',
+      err(e)
     );
   }
-
-  if (active.length === 0) {
-    return null;
-  }
-
-  if (!active[0].id || !active[0].name) {
-    throw new Error(
-      'The ACTIVE event is missing Event_ID or Event Name.'
-    );
-  }
-
-  return active[0];
 }
 
+async function scan(text){
+  if(processing)return;
 
-/**
- * Select an event row in Attendance Events and run this function.
- * The selected event becomes ACTIVE; all other event rows become INACTIVE.
- */
-function activateSelectedEvent() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getActiveSheet();
+  const id=String(text||'').trim();
+  if(!id)return;
 
-  if (sh.getName() !== CFG.EVENTS) {
-    throw new Error(
-      'Open Attendance Events and select the desired event row.'
-    );
-  }
+  processing=true;
+  await stopScanner();
 
-  const row = sh.getActiveCell().getRow();
-
-  if (row < 2) {
-    throw new Error(
-      'Select an event row below the header.'
-    );
-  }
-
-  const headers = sh
-    .getRange(
-      1,
-      1,
-      1,
-      sh.getLastColumn()
-    )
-    .getDisplayValues()[0];
-
-  const eventIdCol =
-    headers.indexOf('Event_ID') + 1;
-
-  const eventNameCol =
-    headers.indexOf('Event Name') + 1;
-
-  const eventDateCol =
-    headers.indexOf('Event Date') + 1;
-
-  const statusCol =
-    headers.indexOf('Status') + 1;
-
-  if (
-    !eventIdCol ||
-    !eventNameCol ||
-    !eventDateCol ||
-    !statusCol
-  ) {
-    throw new Error(
-      'Attendance Events headers are incomplete.'
-    );
-  }
-
-  const eventId = String(
-    sh.getRange(row, eventIdCol)
-      .getDisplayValue()
-  ).trim();
-
-  const eventName = String(
-    sh.getRange(row, eventNameCol)
-      .getDisplayValue()
-  ).trim();
-
-  const eventDate = String(
-    sh.getRange(row, eventDateCol)
-      .getDisplayValue()
-  ).trim();
-
-  if (!eventId || !eventName || !eventDate) {
-    throw new Error(
-      'Selected event must have Event_ID, Event Name, and Event Date.'
-    );
-  }
-
-  const lastRow = sh.getLastRow();
-
-  const statusValues = Array.from(
-    {
-      length: Math.max(
-        lastRow - 1,
-        1
-      )
-    },
-    function () {
-      return ['INACTIVE'];
-    }
-  );
-
-  statusValues[row - 2] = ['ACTIVE'];
-
-  sh
-    .getRange(
-      2,
-      statusCol,
-      statusValues.length,
-      1
-    )
-    .setValues(statusValues);
-
-  const event = activeEvent_();
-
-  dashboard_(
-    event,
-    count_(event.id),
+  show(
+    'ready',
+    'PROCESSING…',
     '',
-    null
+    'Alpha ID: '+id,
+    '',
+    'Checking attendance.'
   );
 
-  ss.toast(
-    event.name +
-      ' — ' +
-      formatEventDate_(event.date) +
-      ' is now ACTIVE.',
-    'TML Attendance',
-    5
-  );
+  submit(id);
 }
 
+function submit(id){
+  const token=
+    Date.now().toString(36)+'_'+
+    Math.random().toString(36).slice(2)+'_'+
+    Math.random().toString(36).slice(2);
 
-/* ========================================================================== */
-/* ATTENDANCE LOG                                                             */
-/* ========================================================================== */
+  formEl.action=BACKEND_URL;
+  aidEl.value=id;
+  tokEl.value=token;
+  formEl.submit();
 
-function duplicate_(eventId, alphaId) {
-  const values = sheet_(CFG.LOG)
-    .getDataRange()
-    .getDisplayValues();
+  let tries=0;
+  clearInterval(poll);
 
-  if (values.length < 2) {
-    return null;
-  }
+  poll=setInterval(function(){
+    tries++;
 
-  const headers = values[0].map(String);
-
-  const eventCol =
-    headers.indexOf('Event_ID');
-
-  const alphaCol =
-    headers.indexOf('Alpha_ID');
-
-  const dateCol =
-    headers.indexOf('Scanned Date');
-
-  if (
-    eventCol < 0 ||
-    alphaCol < 0 ||
-    dateCol < 0
-  ) {
-    throw new Error(
-      'Attendance Log requires Event_ID, Alpha_ID, and Scanned Date.'
-    );
-  }
-
-  for (
-    let row = values.length - 1;
-    row >= 1;
-    row--
-  ) {
-    if (
-      String(
-        values[row][eventCol] || ''
-      ).trim() === eventId &&
-      normalizeAlphaId_(
-        values[row][alphaCol]
-      ) === alphaId
-    ) {
-      return values[row][dateCol];
-    }
-  }
-
-  return null;
-}
-
-
-function count_(eventId) {
-  const values = sheet_(CFG.LOG)
-    .getDataRange()
-    .getDisplayValues();
-
-  if (values.length < 2) {
-    return 0;
-  }
-
-  const headers = values[0].map(String);
-
-  const eventCol =
-    headers.indexOf('Event_ID');
-
-  const alphaCol =
-    headers.indexOf('Alpha_ID');
-
-  if (
-    eventCol < 0 ||
-    alphaCol < 0
-  ) {
-    throw new Error(
-      'Attendance Log requires Event_ID and Alpha_ID.'
-    );
-  }
-
-  const uniqueIds = new Set();
-
-  for (
-    let row = 1;
-    row < values.length;
-    row++
-  ) {
-    if (
-      String(
-        values[row][eventCol] || ''
-      ).trim() === eventId
-    ) {
-      const id = normalizeAlphaId_(
-        values[row][alphaCol]
-      );
-
-      if (id) {
-        uniqueIds.add(id);
+    jsonp(
+      'result',
+      {token:token},
+      function(d){
+        if(d&&d.ready){
+          clearInterval(poll);
+          handleResult(d);
+        }
       }
+    );
+
+    if(tries>=24){
+      clearInterval(poll);
+      processing=false;
+
+      show(
+        'error',
+        'TIMEOUT',
+        '',
+        '',
+        '',
+        'Check Attendance Log before rescanning.'
+      );
     }
-  }
-
-  return uniqueIds.size;
+  },500);
 }
 
-
-function currentCount_() {
-  try {
-    const event = activeEvent_();
-
-    return event
-      ? count_(event.id)
-      : 0;
-
-  } catch (_) {
-    return 0;
-  }
+function unlockAudio(){
+  try{
+    const C=window.AudioContext||window.webkitAudioContext;
+    if(!C)return;
+    if(!audioCtx)audioCtx=new C();
+    if(audioCtx.state==='suspended')audioCtx.resume();
+    // Silent oscillator during the user's Start Scanner tap unlocks audio on Android Chrome.
+    const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+    g.gain.value=.00001;
+    o.connect(g);g.connect(audioCtx.destination);
+    o.start();o.stop(audioCtx.currentTime+.02);
+  }catch(e){}
 }
 
-
-/* ========================================================================== */
-/* DASHBOARD                                                                  */
-/* ========================================================================== */
-
-function dashboard_(
-  event,
-  count,
-  lastName,
-  lastDate
-) {
-  const sh = sheet_(CFG.DASH);
-
-  sh
-    .getRange(1, 1, 8, 2)
-    .setValues([
-      [
-        'TML REAL_ID ATTENDANCE DASHBOARD',
-        ''
-      ],
-      [
-        'Active Event',
-        event.name || ''
-      ],
-      [
-        'Event ID',
-        event.id || ''
-      ],
-      [
-        'Event Date',
-        formatEventDate_(event.date)
-      ],
-      [
-        'Brothers Checked In',
-        Number(count || 0)
-      ],
-      [
-        'Last Check-In',
-        lastName || ''
-      ],
-      [
-        'Last Check-In Time',
-        lastDate
-          ? displayStoredTimestamp_(lastDate)
-          : ''
-      ],
-      [
-        'Last Refreshed',
-        formatDateTime_(new Date())
-      ]
-    ]);
+function playTone(freq,duration,delay,volume){
+  try{
+    if(!audioCtx)return;
+    if(audioCtx.state==='suspended')audioCtx.resume();
+    const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+    const s=audioCtx.currentTime+(delay||0);
+    o.type='sine';
+    o.frequency.setValueAtTime(freq,s);
+    g.gain.setValueAtTime(.0001,s);
+    g.gain.exponentialRampToValueAtTime(volume||.35,s+.015);
+    g.gain.exponentialRampToValueAtTime(.0001,s+duration);
+    o.connect(g);g.connect(audioCtx.destination);
+    o.start(s);o.stop(s+duration+.03);
+  }catch(e){}
 }
 
+function resultFeedback(state,title){
+  const t=String(title||'').toUpperCase();
 
-function refreshAttendanceDashboard() {
-  const event = activeEvent_();
-
-  if (!event) {
-    const sh = sheet_(CFG.DASH);
-
-    sh.getRange('B2:B8').clearContent();
-    sh.getRange('B2')
-      .setValue('NO ACTIVE EVENT');
-    sh.getRange('B5')
-      .setValue(0);
-
+  if(state==='success'){
+    playTone(659,.14,0,.40);
+    playTone(880,.20,.15,.42);
+    if(navigator.vibrate)navigator.vibrate(80);
     return;
   }
 
-  dashboard_(
-    event,
-    count_(event.id),
-    '',
-    null
-  );
-}
-
-
-
-/* ========================================================================== */
-/* ATTENDANCE REPORTS                                                         */
-/* ========================================================================== */
-
-function refreshAttendanceReports() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let report = ss.getSheetByName(CFG.REPORTS);
-  if (!report) report = ss.insertSheet(CFG.REPORTS);
-
-  const events = eventMap_();
-  const logSheet = sheet_(CFG.LOG);
-  const log = logSheet.getDataRange().getDisplayValues();
-  const headers = log.length ? log[0].map(String) : [];
-
-  const eventCol = headers.indexOf('Event_ID');
-  const alphaCol = headers.indexOf('Alpha_ID');
-  const scannedCol = headers.indexOf('Scanned Date');
-  const nameCol = headers.indexOf('Full Name');
-
-  if (eventCol < 0 || alphaCol < 0 || scannedCol < 0 || nameCol < 0) {
-    throw new Error(
-      'Attendance Log requires Event_ID, Alpha_ID, Scanned Date, and Full Name.'
-    );
+  if(state==='duplicate'){
+    playTone(494,.12,0,.42);
+    playTone(494,.12,.18,.42);
+    if(navigator.vibrate)navigator.vibrate([90,80,90]);
+    return;
   }
 
-  const detailRows = [];
-  const summary = {};
-
-  for (let r = 1; r < log.length; r++) {
-    const eventId = String(log[r][eventCol] || '').trim();
-    const alphaId = String(log[r][alphaCol] || '').trim();
-    const checkIn = String(log[r][scannedCol] || '').trim();
-    const fullName = String(log[r][nameCol] || '').trim();
-
-    if (!eventId || !alphaId) continue;
-
-    const ev = events[eventId] || {
-      name: 'Unknown Event',
-      date: ''
-    };
-
-    detailRows.push([
-      eventId,
-      ev.name,
-      ev.date,
-      alphaId,
-      fullName,
-      checkIn
-    ]);
-
-    if (!summary[eventId]) {
-      summary[eventId] = {
-        name: ev.name,
-        date: ev.date,
-        ids: new Set()
-      };
-    }
-    summary[eventId].ids.add(alphaId);
-  }
-
-  const summaryRows = Object.keys(summary)
-    .sort()
-    .map(function(eventId) {
-      const item = summary[eventId];
-      return [
-        eventId,
-        item.name,
-        item.date,
-        item.ids.size
-      ];
-    });
-
-  // Rebuild the report body every time while preserving the worksheet itself.
-  report.clearContents();
-  report.clearFormats();
-
-  // Summary section
-  report.getRange(1, 1, 1, 4).setValues([[
-    'Event_ID',
-    'Event Name',
-    'Event Date',
-    'Brothers Attended'
-  ]]);
-
-  if (summaryRows.length) {
-    report.getRange(2, 1, summaryRows.length, 4)
-      .setValues(summaryRows);
-  }
-
-  // Keep detail heading at row 6 when possible; move it down only if summary grows.
-  const detailHeaderRow = Math.max(6, summaryRows.length + 3);
-
-  report.getRange(detailHeaderRow, 1, 1, 6).setValues([[
-    'Event_ID',
-    'Event Name',
-    'Event Date',
-    'Alpha_ID',
-    'Full Name',
-    'Check-In Time'
-  ]]);
-
-  if (detailRows.length) {
-    report.getRange(detailHeaderRow + 1, 1, detailRows.length, 6)
-      .setValues(detailRows);
-  }
-
-  // Formatting
-  report.setFrozenRows(1);
-  report.getRange(1, 1, 1, 4)
-    .setFontWeight('bold')
-    .setBackground('#BB8D0A')
-    .setFontColor('#000000');
-
-  report.getRange(detailHeaderRow, 1, 1, 6)
-    .setFontWeight('bold')
-    .setBackground('#111111')
-    .setFontColor('#FFFFFF');
-
-  report.getRange(1, 1, Math.max(report.getLastRow(), 1), 6)
-    .setVerticalAlignment('middle');
-
-  report.autoResizeColumns(1, 6);
-
-  if (!summaryRows.length) {
-    report.getRange(2, 1)
-      .setValue('No attendance records are currently in Attendance Log.');
-  }
-
-  ss.toast(
-    'Attendance Reports refreshed: ' +
-      detailRows.length +
-      ' attendance record(s).',
-    'TML Attendance',
-    5
-  );
-}
-
-
-function eventMap_() {
-  const values = sheet_(CFG.EVENTS)
-    .getDataRange()
-    .getDisplayValues();
-
-  if (!values.length) return {};
-
-  const headers = values[0].map(String);
-  const idCol = headers.indexOf('Event_ID');
-  const nameCol = headers.indexOf('Event Name');
-  const dateCol = headers.indexOf('Event Date');
-
-  if (idCol < 0 || nameCol < 0 || dateCol < 0) {
-    throw new Error(
-      'Attendance Events requires Event_ID, Event Name, and Event Date.'
-    );
-  }
-
-  const map = {};
-
-  for (let r = 1; r < values.length; r++) {
-    const id = String(values[r][idCol] || '').trim();
-    if (!id) continue;
-
-    map[id] = {
-      name: String(values[r][nameCol] || '').trim(),
-      date: formatEventDate_(
-        String(values[r][dateCol] || '').trim()
-      )
-    };
-  }
-
-  return map;
-}
-
-
-/* ========================================================================== */
-/* GOOGLE SHEETS MENU                                                         */
-/* ========================================================================== */
-
-function verifyTimeZones() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const now = new Date();
-
-  const scriptTz = Session.getScriptTimeZone();
-  const spreadsheetTz = ss.getSpreadsheetTimeZone();
-  const chicagoNow = Utilities.formatDate(
-    now,
-    CFG.TZ,
-    'M/d/yyyy h:mm:ss a'
-  );
-  const rawDate = now.toISOString();
-
-  console.log('=== TML ATTENDANCE TIME ZONE CHECK ===');
-  console.log('Script Time Zone: ' + scriptTz);
-  console.log('Spreadsheet Time Zone: ' + spreadsheetTz);
-  console.log('Configured Time Zone: ' + CFG.TZ);
-  console.log('Chicago Time Now: ' + chicagoNow);
-  console.log('Raw Date (UTC ISO): ' + rawDate);
-  console.log('======================================');
-
-  return {
-    scriptTimeZone: scriptTz,
-    spreadsheetTimeZone: spreadsheetTz,
-    configuredTimeZone: CFG.TZ,
-    chicagoTimeNow: chicagoNow,
-    rawDateUtcIso: rawDate
-  };
-}
-
-
-function onOpen() {
-  SpreadsheetApp
-    .getUi()
-    .createMenu('TML Attendance Admin')
-    .addItem(
-      'Activate Selected Event',
-      'activateSelectedEvent'
-    )
-    .addItem(
-      'Refresh Dashboard',
-      'refreshAttendanceDashboard'
-    )
-    .addItem(
-      'Refresh Attendance Reports',
-      'refreshAttendanceReports'
-    )
-    .addItem(
-      'Verify Time Zones',
-      'verifyTimeZones'
-    )
-    .addToUi();
-}
-
-
-/* ========================================================================== */
-/* RESULT / FORMATTING HELPERS                                                */
-/* ========================================================================== */
-
-function result_(
-  state,
-  title,
-  message,
-  memberName,
-  alphaId,
-  eventName,
-  eventId,
-  eventDate,
-  count,
-  time
-) {
-  return {
-    state: state,
-    title: title,
-    message: message,
-    memberName: memberName || '',
-    alphaId: alphaId || '',
-    eventName: eventName || '',
-    eventId: eventId || '',
-    eventDate: eventDate || '',
-    count: Number(count || 0),
-    time: time || ''
-  };
-}
-
-
-function normalizeAlphaId_(value) {
-  if (
-    value === null ||
-    value === undefined
-  ) {
-    return '';
-  }
-
-  return String(value)
-    .trim()
-    .replace(/\.0$/, '');
-}
-
-
-/**
- * Event dates are calendar dates, not timestamps.
- *
- * This function deliberately avoids new Date("10/10/2026"),
- * which can introduce UTC/local-time shifts.
- */
-function formatEventDate_(value) {
-  if (!value) {
-    return '';
-  }
-
-  // Event Date is calendar text, not a timestamp.
-  // Example: 10/10/2026 must always remain October 10, 2026.
-  const text = String(value).trim();
-
-  const match = text.match(
-    /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/
-  );
-
-  if (match) {
-    const month = Number(match[1]);
-    const day = Number(match[2]);
-    const year = Number(match[3]);
-
-    const monthNames = [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December'
-    ];
-
-    if (
-      month >= 1 &&
-      month <= 12 &&
-      day >= 1 &&
-      day <= 31
-    ) {
-      return (
-        monthNames[month - 1] +
-        ' ' +
-        day +
-        ', ' +
-        year
-      );
+  if(state==='error'){
+    if(t.includes('MEMBER NOT FOUND')){
+      playTone(330,.18,0,.45);
+      playTone(220,.30,.20,.48);
+      if(navigator.vibrate)navigator.vibrate(350);
+    }else{
+      playTone(247,.32,0,.45);
+      if(navigator.vibrate)navigator.vibrate(300);
     }
   }
-
-  return text;
 }
 
+function handleResult(r){
+  processing=false;
+  resultFeedback(r.state,r.title);
+  
 
-/**
- * Check-in values ARE timestamps, so they should be formatted
- * using America/Chicago.
- */
-/**
- * Produces the canonical attendance timestamp as America/Chicago text.
- * Attendance Log stores this text exactly so UTC cannot be redisplayed.
- */
-function chicagoTimestamp_(value) {
-  const date = value instanceof Date
-    ? value
-    : new Date(value);
+  countEl.textContent=Number(r.count||0);
 
-  if (!date || isNaN(date.getTime())) {
-    return String(value || '');
+  if(r.eventName){
+    eventEl.textContent=r.eventName;
   }
 
-  return Utilities.formatDate(
-    date,
-    CFG.TZ,
-    'M/d/yyyy h:mm:ss a'
-  );
-}
-
-
-/**
- * Attendance Log timestamps are now stored as Chicago-time text.
- * Older Date-valued records are still formatted safely for compatibility.
- */
-function displayStoredTimestamp_(value) {
-  if (!value) {
-    return '';
+  if(r.eventDate){
+    eventDateEl.textContent=r.eventDate;
   }
 
-  if (value instanceof Date && !isNaN(value.getTime())) {
-    return Utilities.formatDate(
-      value,
-      CFG.TZ,
-      'M/d/yyyy h:mm:ss a'
-    );
-  }
+  const t=r.time
+    ? (r.state==='duplicate'
+        ? 'Original check-in: '
+        : 'Checked in: ')+r.time
+    : '';
 
-  return String(value).trim();
-}
-
-
-function formatDateTime_(value) {
-  const date = value instanceof Date
-    ? value
-    : new Date(value);
-
-  if (
-    !date ||
-    isNaN(date.getTime())
-  ) {
-    return String(value || '');
-  }
-
-  return Utilities.formatDate(
-    date,
-    CFG.TZ,
-    'M/d/yyyy h:mm:ss a'
-  );
-}
-
-
-/* ========================================================================== */
-/* GENERAL HELPERS                                                            */
-/* ========================================================================== */
-
-function sheet_(name) {
-  const sh = SpreadsheetApp
-    .getActiveSpreadsheet()
-    .getSheetByName(name);
-
-  if (!sh) {
-    throw new Error(
-      'Missing sheet: ' + name
-    );
-  }
-
-  return sh;
-}
-
-
-function safeToken_(value) {
-  return String(value || '')
-    .replace(
-      /[^A-Za-z0-9_-]/g,
-      ''
-    )
-    .slice(0, 80);
-}
-
-
-function safeCallback_(value) {
-  const callback = String(
-    value || 'tmlCallback'
+  show(
+    r.state||'error',
+    r.title||'ATTENDANCE',
+    r.memberName||'',
+    r.alphaId?'Alpha ID: '+r.alphaId:'',
+    t,
+    r.message||''
   );
 
-  return /^[A-Za-z_$][\w$\.]*$/.test(
-    callback
-  )
-    ? callback
-    : 'tmlCallback';
+  setTimeout(function(){
+    if(!processing){
+      startScanner();
+    }
+  },r.state==='success'?1800:2800);
 }
 
+function jsonp(action,params,cb){
+  const name=
+    'tmlcb_'+
+    Date.now().toString(36)+'_'+
+    Math.random().toString(36).slice(2);
 
-function jsonp_(callback, object) {
-  return ContentService
-    .createTextOutput(
-      callback +
-        '(' +
-        JSON.stringify(object) +
-        ');'
-    )
-    .setMimeType(
-      ContentService.MimeType.JAVASCRIPT
-    );
+  const s=document.createElement('script');
+
+  window[name]=function(d){
+    try{
+      cb(d);
+    }finally{
+      delete window[name];
+      if(s.parentNode)s.parentNode.removeChild(s);
+    }
+  };
+
+  const q=new URLSearchParams();
+  q.set('action',action);
+  q.set('callback',name);
+
+  Object.keys(params||{}).forEach(function(k){
+    q.set(k,params[k]);
+  });
+
+  s.src=BACKEND_URL+'?'+q.toString();
+
+  s.onerror=function(){
+    delete window[name];
+    if(s.parentNode)s.parentNode.removeChild(s);
+  };
+
+  document.body.appendChild(s);
 }
+
+function show(state,t,m,a,tm,msg){
+  boxEl.className='status '+(state||'ready');
+  titleEl.textContent=t||'';
+  memberEl.textContent=m||'';
+  alphaEl.textContent=a||'';
+  timeEl.textContent=tm||'';
+  msgEl.textContent=msg||'';
+}
+
+function err(e){
+  return e?(e.message||String(e)):'Unknown error.';
+}
+</script>
+</body>
+</html>
