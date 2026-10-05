@@ -34,6 +34,11 @@ button{flex:1;min-height:50px;border:0;border-radius:10px;font-size:16px;font-we
 .line{font-size:16px;margin:6px}
 .small{text-align:center;color:#666;font-size:12px;margin-top:12px}
 iframe,form{display:none}
+.gate{background:#fff;padding:18px;border-radius:0 0 14px 14px;box-shadow:0 3px 14px #0002;text-align:center}
+.gate input{width:100%;max-width:300px;font-size:24px;padding:12px;text-align:center;border:2px solid #bbb;border-radius:10px;letter-spacing:3px}
+.gate button{margin-top:12px;max-width:300px;background:var(--g)}
+.gateMsg{margin-top:10px;font-weight:700;color:var(--err)}
+.hidden{display:none!important}
 </style>
 </head>
 
@@ -46,6 +51,14 @@ iframe,form{display:none}
   <div class="event-date" id="eventDate"></div>
 </div>
 
+<div id="gate" class="gate">
+<div class="title">AUTHORIZED SCANNER ACCESS</div>
+<div class="line">Enter the TML Scanner PIN to continue.</div>
+<input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off">
+<br><button id="unlock" type="button">Unlock Scanner</button>
+<div id="gateMsg" class="gateMsg"></div>
+</div>
+<div id="appContent" class="hidden">
 <div class="counter">
   <div class="label">BROTHERS CHECKED IN</div>
   <div id="count">0</div>
@@ -72,7 +85,7 @@ iframe,form{display:none}
   <div id="msg" class="line">Tap Start Scanner to begin.</div>
 </div>
 
-<div class="small">
+</div><div class="small">
   Uses existing TML Real_ID QR codes without modification.
 </div>
 
@@ -80,12 +93,20 @@ iframe,form{display:none}
 
 <form id="form" method="POST" target="postFrame">
   <input id="aid" name="alpha_id">
-  <input id="tok" name="token">
+  <input id="tok" name="token"><input id="postPin" name="pin">
 </form>
 
 </div>
 
 <script>
+const gate=document.getElementById('gate');
+const pinEl=document.getElementById('pin');
+const unlockEl=document.getElementById('unlock');
+const gateMsg=document.getElementById('gateMsg');
+const appContent=document.getElementById('appContent');
+const postPin=document.getElementById('postPin');
+let scannerPin='';
+
 const BACKEND_URL='https://script.google.com/macros/s/AKfycbwdN48JaxgLN6dE2_PUFqCHDXIR1z5-TeuRCaHNpet_rSgH5hnqvXIFLvMHxJN_3WlRnA/exec';
 
 let qr=null,cameras=[],cam=0,running=false,processing=false,poll=null,audioCtx=null;
@@ -128,6 +149,44 @@ function loadStatus(){
         d.message||'No active event.'
       );
     }
+  });
+}
+
+function unlockScanner(){
+  const pin=String(pinEl.value||'').trim();
+  gateMsg.textContent='';
+  if(!pin){gateMsg.textContent='Enter the scanner PIN.';return;}
+  unlockEl.disabled=true;
+  unlockEl.textContent='Checking…';
+
+  jsonp('auth',{pin},d=>{
+    unlockEl.disabled=false;
+    unlockEl.textContent='Unlock Scanner';
+    if(d&&d.ok){
+      scannerPin=pin;
+      postPin.value=pin;
+      gate.classList.add('hidden');
+      appContent.classList.remove('hidden');
+      unlockAudio();
+      loadStatus();
+    }else{
+      scannerPin='';
+      postPin.value='';
+      pinEl.value='';
+      gateMsg.textContent='Incorrect scanner PIN.';
+      pinEl.focus();
+    }
+  });
+}
+unlockEl.addEventListener('click',unlockScanner);
+pinEl.addEventListener('keydown',e=>{if(e.key==='Enter')unlockScanner();});
+
+function loadStatus(){
+  jsonp('status',{},d=>{
+    event.textContent=d.eventName||'NO ACTIVE EVENT';
+    if(d.eventDate)event.textContent+=(event.textContent?' — ':'')+d.eventDate;
+    count.textContent=Number(d.count||0);
+    if(!d.ok)show('error','NOT READY','','','',d.message||'No active event.');
   });
 }
 
@@ -257,6 +316,7 @@ function submit(id){
   formEl.action=BACKEND_URL;
   aidEl.value=id;
   tokEl.value=token;
+  postPin.value=scannerPin;
   formEl.submit();
 
   let tries=0;
