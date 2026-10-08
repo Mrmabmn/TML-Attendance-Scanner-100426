@@ -45,7 +45,7 @@ iframe,form{display:none}
 <body>
 <div class="page">
 
-<div class="head">
+<div class="head" id="scannerHead" style="display:none">
   <h1>TML Real_ID Attendance</h1>
   <div class="event" id="event">Loading active event…</div>
   <div class="event-date" id="eventDate"></div>
@@ -130,7 +130,15 @@ startEl.addEventListener('click',startScanner);
 switchEl.addEventListener('click',switchCamera);
 
 function loadStatus(){
+  eventEl.textContent='Checking active event…';
+  const timeout=setTimeout(function(){
+    if(eventEl.textContent==='Checking active event…'){
+      eventEl.textContent='EVENT REQUEST TIMED OUT';
+      show('error','CONNECTION ERROR','','','','The event status request did not complete.');
+    }
+  },12000);
   jsonp('status',{},function(d){
+    clearTimeout(timeout);
     eventEl.textContent=d.eventName||'NO ACTIVE EVENT';
     eventDateEl.textContent=d.eventDate||'';
     countEl.textContent=Number(d.count||0);
@@ -167,6 +175,7 @@ function unlockScanner(){
       postPin.value=pin;
       gate.classList.add('hidden');
       appContent.classList.remove('hidden');
+      document.getElementById('scannerHead').style.display='block';
       unlockAudio();
       loadStatus();
     }else{
@@ -467,6 +476,10 @@ function jsonp(action,params,cb){
   s.src=BACKEND_URL+'?'+q.toString();
 
   s.onerror=function(){
+    if(action==='status'){
+      eventEl.textContent='EVENT CONNECTION FAILED';
+      show('error','CONNECTION ERROR','','','','Unable to load event status from Apps Script.');
+    }
     delete window[name];
     if(s.parentNode)s.parentNode.removeChild(s);
   };
